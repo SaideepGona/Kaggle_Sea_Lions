@@ -1,0 +1,28 @@
+          ------------------ Plan for Sea Lions Kaggle Competition --------------------
+
+(N) 1.) Count the number of dots and record their locations for the reference images.
+    - Use thresholding to isolate only the dots
+    - Algorithm to identify and count the dots
+    - Should be highly accurate
+
+(O) 2.) Create the training set:
+    - Chop up the images into reasonable sub-segments *****
+    - These will overlap with one another at set intervals *****
+    - Based on the coordinates of dots, assign a "correct answer" to each of the subimages *****
+    - Training set is therefore a large number of images and their "correct answer"(number of respective sea lions)
+    - Needs to be done in steps due to overwhelming size
+    
+(O) 3.) Train a neural net classifier 
+    - Use the training set generated previously
+    - Crossvalidate using the 20-80 rule
+    - Optimization of this step is last priority, better to train using a predefined algo to a suitable accuracy 
+    level and then stick with that
+
+(N) 4.) Given the test data, perform the same chopping operation as in step 2 for each image
+    - For each image, run the chopped sections through the trained classifier to return sea lion counts
+    for the subimages
+    - Use these counts to create frequency maps for each sea lion type
+    - Local maxima on these maps should indicate presence of a sea lion, count them and output result
+    
+
+
