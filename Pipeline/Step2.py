@@ -20,6 +20,8 @@ import skimage.measure
 
 import scipy
 
+import random
+
 import shapely
 import shapely.geometry
 from shapely.geometry import Polygon
@@ -27,42 +29,69 @@ from shapely.geometry import Polygon
 import tensorflow as tf 
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import dtypes
+# import prettytensor as pt
 
-# List of modifiable variables. Will become object properties once encapsulated
+#***************************************************************************************************************
+
+# -------------------------- List of GLOBALS. Can modify input parameters here. --------------------------------
 
 # Image and training set processing
 
-subimage_width = None                   # Width of each subimage after slicing out of the original
-subimage_height = None                  # Height of each subimage after slicing out of the original
-height_spacing = None                   # How far apart vertically each subimage is sliced
-width_spacing = None                    # How far apart horizontally each subimage is sliced
+base_data_path = '/home/saideep/Github_Repos/Saideep/Kaggle_Sea_Lions/Sample_Data'
+normal_path = '/Train/'
+dot_path = '/TrainDotted/'
+subimage_width = 100                   # Width of each subimage after slicing out of the original
+subimage_height = 100               # Height of each subimage after slicing out of the original
+height_spacing = 500             # How far apart vertically each subimage is sliced
+width_spacing = 500              # How far apart horizontally each subimage is sliced
+channels = 3
+subimage_stretched = subimage_height * subimage_width * channels             # The length of image vectors after flattening
+padding_percentage = 20               # Perventage value for how far from the edge a dot must be to "count" towards the label
+padding = padding_percentage/100  
+total_images = 10
+full_image_count = 10              # Number of full training images that will be used to train   
+test_image_count = 5    
 
 # Neural net parameters
 
+# Convolutional layers
+filter_size1 = 5
+num_filters1 = 16
+filter_size2 = 5
+num_filters2 = 36
+# Fully connected layers
+hidden_layer_1_nodes = 100
+hidden_layer_2_nodes = 20
+hidden_layer_3_nodes = 200
+# Labels and output
+max_seal_count = 2
+label_set = []
+for label in range(max_seal_count+1):
+    current_label = [0] * (max_seal_count+1)
+    current_label[label] += 1
+    label_set.append(current_label)
+output_classes = max_seal_count + 1
+binary_label_length = output_classes * (max_seal_count+1)
+label_weighting = 1000
+batch_size = 1 
+# Placeholders and other
+images_placeholder = tf.placeholder(dtype='float',shape=[batch_size, subimage_stretched])         # Placeholder for subimage neural net input
+labels_placeholder = tf.placeholder(dtype='float',shape=[batch_size, output_classes])             # Placeholder for subimage label neural net input
+num_epochs = 1                                                               # Number of training epochs
+
+#maxlabel(for testing)
+
+MAXLABEL = 0
 
 # Step1: Functions for splitting images apart into subimages
 
-def split_image(image, sub_width = 200, sub_height = 300, height_spacing = 50, width_spacing = 50):
+def split_image(image):
 
     '''
     Given an input image and the space between subimage splits, splits and stores all subimages 
     for training as well as the relative coordinates.
     Currently lacks a good solution to the far edges.
     '''
-
-    # Defaults
-
-    if sub_width == None:
-        sub_width = 200
-
-    if sub_height == None:
-        sub_height= 300
-
-    if height_spacing == None:
-        height_spacing = 50
-
-    if width_spacing == None:
-        width_spacing = 50
 
     # Body starts here
 
@@ -77,20 +106,21 @@ def split_image(image, sub_width = 200, sub_height = 300, height_spacing = 50, w
     height_splits = total_height//height_spacing
 
     subimages = []
+    flattened_subimages = []
 
-    for width_scan in range(int(width_splits - ceil(sub_width/width_spacing))):
+    for width_scan in range(int(width_splits - ceil(subimage_width/width_spacing))):
 
-        for height_scan in range(int(height_splits - ceil(sub_height//height_spacing))):
+        for height_scan in range(int(height_splits - ceil(subimage_height//height_spacing))):
 
-            current_section = image[height_scan*height_spacing:height_scan*height_spacing + sub_height,
-                                    width_scan*width_spacing:width_scan*width_spacing + sub_width]
+            current_section = image[height_scan*height_spacing:height_scan*height_spacing + subimage_height,
+                                    width_scan*width_spacing:width_scan*width_spacing + subimage_width]
 
             subimages.append(current_section)
 
     return subimages
 
 
-def coords(subimage, dot_subimage, padding = 0.2):
+def coords(subimage, dot_subimage):
 
         """ Extract coordinates of dotted sealions and return list of SeaLionCoord objects)
             Code is adapted from:
@@ -176,10 +206,18 @@ def coords(subimage, dot_subimage, padding = 0.2):
 
                     label[dot[0]] += 1
 
-        return label     
+        # binary_label = [0] * binary_label_length
+        # # Constructs a "binary_label" version of the label
 
-def create_training_single(normal_path, dot_path)
+        # for color_num in range(len(label)):
+        #     color_count = label[color_num]
+        #     binary_label[color_num*(max_seal_count+1) + color_count] += 1
+        # weighted_label = [val*2 for val in label]
 
+        return label   
+
+def create_training_single(normal_path, dot_path):
+    global MAXLABEL
     '''
     Given the paths a single "Full" image's normal and dotted versions, function will:
         1.) Split the images apart into subimages
@@ -204,103 +242,272 @@ def create_training_single(normal_path, dot_path)
     # Find location of dots, and create a label for the input image
     splits_labels = []
     valid_index = []
+
     for subimage_number in range(len(normal_splits)):
-        sub_image_label = coords(normal_splits[subimage_number],dot_splits[subimage_number])
-        if sub_image_label != None:
+        print(subimage_number)
+        full_sub_image_label = coords(normal_splits[subimage_number],dot_splits[subimage_number])
+        sub_image_label = [0] * (max_seal_count+1)
+        if full_sub_image_label != None:
             valid_index.append(subimage_number)
+            cur_maxlabel = max(full_sub_image_label)
+            if cur_maxlabel > MAXLABEL:
+                MAXLABEL = cur_maxlabel
+            sub_image_label[full_sub_image_label[0]] += 1
         splits_labels.append(sub_image_label)
 
     valid_labels = [splits_labels[i] for i in valid_index]
+    if len(valid_labels) == 0:
+        return 0, 0
+    
     valid_subimages = [normal_splits[i] for i in valid_index]
 
-    print(valid_labels, len(valid_subimages),len(valid_labels))
+    # Normalization step to create a balanced test set
 
-    return valid_subimages, valid_labels
+    valid_label_counts = []
+    for label in label_set:
+        valid_label_counts.append(valid_labels.count(label))
+    valid_label_count_min = min(valid_label_counts)
 
+    print(valid_label_count_min)
+    base_lists = []
+    print(valid_label_counts)
 
-'''
+    for label_num in range(max_seal_count+1):
+        current_base_list = [0] * (valid_label_counts[label_num]-valid_label_count_min)
+        current_base_list = current_base_list + ([1]*valid_label_count_min)
+        random.shuffle(current_base_list)
+        base_lists.append(current_base_list)
+
+    super_valid_subimages = []
+    super_valid_labels = []
+
+    for valid_label_num in range(len(valid_labels)):   #Loop through all the valid labels
+
+        label_count = 0
+        for label in label_set:                         #Loop through the possible label types
+            print(label_count, current_base_list)
+            if current_base_list[label_count] == None:
+                label_count += 1
+                continue   
+            else:                    
+                if label == valid_labels[valid_label]:                                      #Verify that the valid label matches the label type
+                    if current_base_list[label_count][0] == 1:                               #Verify the normalized contribution of that label
+                        super_valid_labels.append(valid_labels[valid_label_num])
+                        super_valid_subimages.append(valid_subimages[valid_label_num])
+                    del current_base_list[label_count][0]                                   #Delete the "used up" label type
+                    break
+                else:
+                    label_count += 1
+
+    print(super_valid_labels)
+
+    return super_valid_subimages, super_valid_labels
 
 # Step3
+def new_weights(shape):
+    return tf.Variable(tf.truncated_normal(shape, stddev=0.05))
 
-dataset_path      = "/path/to/out/dataset/mnist/"
-test_labels_file  = "test-labels.csv"
-train_labels_file = "train-labels.csv"
+def new_biases(length):
+    return tf.Variable(tf.constant(0.05, shape=[length]))
 
-inputdata = "bla"
+def new_conv_layer(input,              # The previous layer.
+                   num_input_channels, # Num. channels in prev. layer.
+                   filter_size,        # Width and height of each filter.
+                   num_filters,        # Number of filters.
+                   use_pooling=True):  # Use 2x2 max-pooling.
 
-input_width = 200
-input_height = 200
-channels = 3
-input_full_length = input_height*input_width*channels
+    # Shape of the filter-weights for the convolution.
+    # This format is determined by the TensorFlow API.
+    shape = [filter_size, filter_size, num_input_channels, num_filters]
 
-n_nodes_hl1 = 10000
-n_nodes_hl2 = 1000
-n_nodes_hl3 = 200
+    # Create new weights aka. filters with the given shape.
+    weights = new_weights(shape=shape)
 
-n_classes = 5
-batch_size = 1 #Will vary based on choice
+    # Create new biases, one for each filter.
+    biases = new_biases(length=num_filters)
 
-x_placeholder = tf.placeholder('float',[None, input_fulllength])
-y_placeholder = tf.placeholder('float')
+    # Create the TensorFlow operation for convolution.
+    # Note the strides are set to 1 in all dimensions.
+    # The first and last stride must always be 1,
+    # because the first is for the image-number and
+    # the last is for the input-channel.
+    # But e.g. strides=[1, 2, 2, 1] would mean that the filter
+    # is moved 2 pixels across the x- and y-axis of the image.
+    # The padding is set to 'SAME' which means the input image
+    # is padded with zeroes so the size of the output is the same.
+    layer = tf.nn.conv2d(input=input,
+                         filter=weights,
+                         strides=[1, 1, 1, 1],
+                         padding='SAME')
 
+    # Add the biases to the results of the convolution.
+    # A bias-value is added to each filter-channel.
+    layer += biases
 
+    # Use pooling to down-sample the image resolution?
+    if use_pooling:
+        # This is 2x2 max-pooling, which means that we
+        # consider 2x2 windows and select the largest value
+        # in each window. Then we move 2 pixels to the next window.
+        layer = tf.nn.max_pool(value=layer,
+                               ksize=[1, 2, 2, 1],
+                               strides=[1, 2, 2, 1],
+                               padding='SAME')
+
+    # Rectified Linear Unit (ReLU).
+    # It calculates max(x, 0) for each input pixel x.
+    # This adds some non-linearity to the formula and allows us
+    # to learn more complicated functions.
+    layer = tf.nn.relu(layer)
+
+    # Note that ReLU is normally executed before the pooling,
+    # but since relu(max_pool(x)) == max_pool(relu(x)) we can
+    # save 75% of the relu-operations by max-pooling first.
+
+    # We return both the resulting layer and the filter-weights
+    # because we will plot the weights later.
+    return layer, weights
+
+def flatten_layer(layer):
+    # Get the shape of the input layer.
+    layer_shape = layer.get_shape()
+
+    # The shape of the input layer is assumed to be:
+    # layer_shape == [num_images, img_height, img_width, num_channels]
+
+    # The number of features is: img_height * img_width * num_channels
+    # We can use a function from TensorFlow to calculate this.
+    num_features = layer_shape[1:4].num_elements()
+    
+    # Reshape the layer to [num_images, num_features].
+    # Note that we just set the size of the second dimension
+    # to num_features and the size of the first dimension to -1
+    # which means the size in that dimension is calculated
+    # so the total size of the tensor is unchanged from the reshaping.
+    layer_flat = tf.reshape(layer, [-1, num_features])
+
+    # The shape of the flattened layer is now:
+    # [num_images, img_height * img_width * num_channels]
+
+    # Return both the flattened layer and the number of features.
+    return layer_flat, num_features
 
 def neural_network_model(data):
 
-    hidden_1_layer = {'weights':tf.Variable(tf.random_normal([input_full_length, n_nodes_hl1])),
-    'biases':tf.Variable(tf.random_normal([n_nodes_hl1]))}
-
-    hidden_2_layer = {'weights':tf.Variable(tf.random_normal([n_nodes_hl1, n_nodes_hl2])),
-    'biases':tf.Variable(tf.random_normal([n_nodes_hl2]))}
-
-    hidden_3_layer = {'weights':tf.Variable(tf.random_normal([n_nodes_hl2, n_nodes_hl3])),
-    'biases':tf.Variable(tf.random_normal([n_nodes_hl3]))}
-
-    output_layer = {'weights':tf.Variable(tf.random_normal([n_nodes_hl3, n_classes])),
-    'biases':tf.Variable(tf.random_normal([n_classes]))}
+    '''
+    Specifies the TensorFlow neural net model to be used. Does not actively run anything.
+    '''
 
     # The actual model starts here
 
-    l1 = tf.add(tf.matmul(data,hidden_1_layer['weights']), hidden_1_layer['biases'])
+    # Convolution layers
+    reshaped_placeholder = tf.reshape(data, [-1, subimage_width, subimage_height, channels])
+    layer_conv1, weights_conv1 = new_conv_layer(input=reshaped_placeholder,
+                   num_input_channels=channels,
+                   filter_size=filter_size1,
+                   num_filters=num_filters1,
+                   use_pooling=True)
+
+    layer_conv2, weights_conv2 = new_conv_layer(input=layer_conv1,
+                   num_input_channels=num_filters1,
+                   filter_size=filter_size2,
+                   num_filters=num_filters2,
+                   use_pooling=True)
+
+    flat_conv_out, len_conv_out = flatten_layer(layer_conv2)
+    # Fully connected layers
+    # Reference dictionaries for each fully connected layer
+
+    hidden_1_layer = {'weights':tf.Variable(tf.random_normal([len_conv_out, hidden_layer_1_nodes])),
+    'biases':tf.Variable(tf.random_normal([hidden_layer_1_nodes]))}
+
+    hidden_2_layer = {'weights':tf.Variable(tf.random_normal([hidden_layer_1_nodes, hidden_layer_2_nodes])),
+    'biases':tf.Variable(tf.random_normal([hidden_layer_2_nodes]))}
+
+    # hidden_3_layer = {'weights':tf.Variable(tf.random_normal([hidden_layer_2_nodes, hidden_layer_3_nodes])),
+    # 'biases':tf.Variable(tf.random_normal([hidden_layer_3_nodes]))}
+
+    output_layer = {'weights':tf.Variable(tf.random_normal([hidden_layer_2_nodes, output_classes])),
+    'biases':tf.Variable(tf.random_normal([output_classes]))}
+
+    l1 = tf.add(tf.matmul(flat_conv_out,hidden_1_layer['weights']), hidden_1_layer['biases'])
     l1 = tf.nn.relu(l1)
 
     l2 = tf.add(tf.matmul(l1,hidden_2_layer['weights']), hidden_2_layer['biases'])
     l2 = tf.nn.relu(l2)
 
-    l3 = tf.add(tf.matmul(l2,hidden_3_layer['weights']), hidden_3_layer['biases'])
-    l3 = tf.nn.relu(l3) 
+    # l3 = tf.add(tf.matmul(l2,hidden_3_layer['weights']), hidden_3_layer['biases'])
+    # l3 = tf.nn.relu(l3) 
     
-    output = tf.matmul(l3,output_layer['weights']) + output_layer['biases']
-
+    output = tf.matmul(l2,output_layer['weights']) + output_layer['biases']
+    print(type(output),"neural net model function")
     return output
     
-def train_neural_network(x_placeholder):
+def train_neural_network():
 
-    prediction = neural_network_model(x_placeholder)
+    '''
+    Instantiates the neural network model and runs the main training session.
+    '''
 
-    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=y_placeholder))
+    prediction = neural_network_model(images_placeholder)
 
+    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=labels_placeholder))
+    print(type(cost),cost,"---------------COST") 
     optimizer = tf.train.AdamOptimizer().minimize(cost)
-
-    num_epochs = 10
-
+    print(type(optimizer),optimizer,"---------------Optimizer")     
+    saver = tf.train.Saver()
+    print(type(saver),saver,"---------------Saver")     
+       
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-
+        print('sess')
         for epoch in range(num_epochs):
             epoch_loss = 0
-            for _ in range(int(image_count/batch_size)):
-                batch_x = training_images[(batch_size * _): (batch_size * _) + batch_size]
-                batch_y = training_labels[(batch_size * _): (batch_size * _) + batch_size]
-                _, c = sess.run([optimizer, cost], feed_dict = {x: batch_x, y: batch_y})
-                epoch_loss += c
-            print('Epoch', epoch, 'completed out of', hm_epochs, 'loss:', epoch_loss)
 
-        correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(epoch_y,1))
+            for full_image_num in range(full_image_count):
 
-        accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
-        print('Accuracy:', accuracy.eval({x:test_images, y:test_labels})) 
+                print('--------------------------------------FULL-IMAGE#  %d' % (full_image_num))
+                
+                normal_full_path = base_data_path + normal_path + str(full_image_num) + '.jpg'
+                dots_full_path = base_data_path + dot_path + str(full_image_num) + '.jpg'
 
-#train_neural_network(x_placeholder)
-'''
+                whole_batch_x, whole_batch_y = create_training_single(normal_full_path, dots_full_path)
+                if whole_batch_x == 0:
+                    continue
+                batch_count = len(whole_batch_x)//batch_size
+                true_count = 0
+
+                if full_image_num % 2 == 0:
+                    saver.save(sess, 'seals-model')
+
+                for batch_num in range(batch_count):
+                    print(batch_num, "<--------------------NEW BATCH")
+                    current_batch_x = np.zeros((batch_size, subimage_stretched))
+                    for batch in range(batch_size):
+                        current_batch_x[batch,:] = whole_batch_x[batch_num*batch_size + batch].flatten()
+                        
+                    current_batch_y = whole_batch_y[batch_num*batch_size: (batch_num+1)*batch_size]
+                    feed_dict = {images_placeholder: current_batch_x, labels_placeholder: current_batch_y}
+                    trained_model = sess.run([optimizer, cost], 
+                        feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched), 
+                            labels_placeholder: current_batch_y})
+                    
+                    trained_out = sess.run(prediction, 
+                        feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched)})
+                    print(trained_out,"<----------------------------accuracy")
+                    print(current_batch_y, "<-------------------------correct")
+                if full_image_num % 1 == 0:
+                    saver.save(sess, 'seals-model')
+                # correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(batch_y,1))
+                # accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
+                print(type(trained_model), trained_model)
+
+        # sess.close()
+        return trained_model
+
+output = train_neural_network()
+print(type(output), output)
+print(MAXLABEL, "maxlabel")
+
+
     
