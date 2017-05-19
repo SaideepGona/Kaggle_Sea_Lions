@@ -21,6 +21,7 @@ import skimage.measure
 import scipy
 
 import random
+import pickle
 
 import shapely
 import shapely.geometry
@@ -35,15 +36,18 @@ from tensorflow.python.framework import dtypes
 
 # -------------------------- List of GLOBALS. Can modify input parameters here. --------------------------------
 
-# Image and training set processing
+# Toggles
+train_toggle = 1
 
+# Image and training set processing
 base_data_path = '/home/saideep/Github_Repos/Saideep/Kaggle_Sea_Lions/Sample_Data'
+# base_data_path = '/home/saideep/Github_Repos/Saideep/Kaggle_Sea_Lions/Pipeline/Step2&3trainingstorage/Total_Training_Set'
 normal_path = '/Train/'
 dot_path = '/TrainDotted/'
 subimage_width = 100                   # Width of each subimage after slicing out of the original
 subimage_height = 100               # Height of each subimage after slicing out of the original
-height_spacing = 500             # How far apart vertically each subimage is sliced
-width_spacing = 500              # How far apart horizontally each subimage is sliced
+height_spacing = 6             # How far apart vertically each subimage is sliced
+width_spacing = 6            # How far apart horizontally each subimage is sliced
 channels = 3
 subimage_stretched = subimage_height * subimage_width * channels             # The length of image vectors after flattening
 padding_percentage = 20               # Perventage value for how far from the edge a dot must be to "count" towards the label
@@ -51,7 +55,7 @@ padding = padding_percentage/100
 total_images = 10
 full_image_count = 10              # Number of full training images that will be used to train   
 test_image_count = 5    
-
+negated_images = 0
 # Neural net parameters
 
 # Convolutional layers
@@ -60,25 +64,27 @@ num_filters1 = 16
 filter_size2 = 5
 num_filters2 = 36
 # Fully connected layers
-hidden_layer_1_nodes = 100
-hidden_layer_2_nodes = 20
+hidden_layer_1_nodes = 80
+hidden_layer_2_nodes = 10
 hidden_layer_3_nodes = 200
 # Labels and output
 max_seal_count = 2
+color_index = 0
 label_set = []
-for label in range(max_seal_count+1):
-    current_label = [0] * (max_seal_count+1)
+for label in range(max_seal_count):
+    current_label = [0] * (max_seal_count)
     current_label[label] += 1
     label_set.append(current_label)
-output_classes = max_seal_count + 1
-binary_label_length = output_classes * (max_seal_count+1)
+output_classes = max_seal_count
+# binary_label_length = output_classes * (max_seal_count+1)
 label_weighting = 1000
 batch_size = 1 
 # Placeholders and other
 images_placeholder = tf.placeholder(dtype='float',shape=[batch_size, subimage_stretched])         # Placeholder for subimage neural net input
 labels_placeholder = tf.placeholder(dtype='float',shape=[batch_size, output_classes])             # Placeholder for subimage label neural net input
-num_epochs = 1                                                               # Number of training epochs
+num_epochs = 20                                                         # Number of training epochs
 
+graph_save_path = '/home/saideep/Github_Repos/Saideep/Kaggle_Sea_Lions/Pipeline/Saved_Models/save.cpkt'
 #maxlabel(for testing)
 
 MAXLABEL = 0
@@ -218,6 +224,7 @@ def coords(subimage, dot_subimage):
 
 def create_training_single(normal_path, dot_path):
     global MAXLABEL
+    global negated_images
     '''
     Given the paths a single "Full" image's normal and dotted versions, function will:
         1.) Split the images apart into subimages
@@ -246,17 +253,20 @@ def create_training_single(normal_path, dot_path):
     for subimage_number in range(len(normal_splits)):
         print(subimage_number)
         full_sub_image_label = coords(normal_splits[subimage_number],dot_splits[subimage_number])
-        sub_image_label = [0] * (max_seal_count+1)
+        sub_image_label = [0] * (max_seal_count)
         if full_sub_image_label != None:
             valid_index.append(subimage_number)
             cur_maxlabel = max(full_sub_image_label)
             if cur_maxlabel > MAXLABEL:
                 MAXLABEL = cur_maxlabel
+            if full_sub_image_label[color_index] >= max_seal_count:
+                full_sub_image_label[0] = max_seal_count-1
             sub_image_label[full_sub_image_label[0]] += 1
         splits_labels.append(sub_image_label)
 
     valid_labels = [splits_labels[i] for i in valid_index]
     if len(valid_labels) == 0:
+        negated_images += 1
         return 0, 0
     
     valid_subimages = [normal_splits[i] for i in valid_index]
@@ -265,14 +275,18 @@ def create_training_single(normal_path, dot_path):
 
     valid_label_counts = []
     for label in label_set:
-        valid_label_counts.append(valid_labels.count(label))
+        valid_label_single_count = valid_labels.count(label)
+        if valid_label_single_count == 0:
+            negated_images += 1
+            return 0,0
+        valid_label_counts.append(valid_label_single_count)
     valid_label_count_min = min(valid_label_counts)
 
-    print(valid_label_count_min)
-    base_lists = []
-    print(valid_label_counts)
+    print(valid_label_counts, "<---------------------valid label counts")
 
-    for label_num in range(max_seal_count+1):
+    base_lists = []
+
+    for label_num in range(max_seal_count):
         current_base_list = [0] * (valid_label_counts[label_num]-valid_label_count_min)
         current_base_list = current_base_list + ([1]*valid_label_count_min)
         random.shuffle(current_base_list)
@@ -285,19 +299,19 @@ def create_training_single(normal_path, dot_path):
 
         label_count = 0
         for label in label_set:                         #Loop through the possible label types
-            print(label_count, current_base_list)
-            if current_base_list[label_count] == None:
+
+            # if base_lists[label_count] == None:
+            #     label_count += 1
+            #     continue   
+            # else:                    
+            if label == valid_labels[valid_label_num]:                                      #Verify that the valid label matches the label type
+                if base_lists[label_count][0] == 1:                                         #Verify the normalized contribution of that label
+                    super_valid_labels.append(valid_labels[valid_label_num])
+                    super_valid_subimages.append(valid_subimages[valid_label_num])
+                del base_lists[label_count][0]                                   #Delete the "used up" label type
+                break
+            else:
                 label_count += 1
-                continue   
-            else:                    
-                if label == valid_labels[valid_label]:                                      #Verify that the valid label matches the label type
-                    if current_base_list[label_count][0] == 1:                               #Verify the normalized contribution of that label
-                        super_valid_labels.append(valid_labels[valid_label_num])
-                        super_valid_subimages.append(valid_subimages[valid_label_num])
-                    del current_base_list[label_count][0]                                   #Delete the "used up" label type
-                    break
-                else:
-                    label_count += 1
 
     print(super_valid_labels)
 
@@ -402,6 +416,7 @@ def neural_network_model(data):
 
     # Convolution layers
     reshaped_placeholder = tf.reshape(data, [-1, subimage_width, subimage_height, channels])
+
     layer_conv1, weights_conv1 = new_conv_layer(input=reshaped_placeholder,
                    num_input_channels=channels,
                    filter_size=filter_size1,
@@ -414,7 +429,20 @@ def neural_network_model(data):
                    num_filters=num_filters2,
                    use_pooling=True)
 
-    flat_conv_out, len_conv_out = flatten_layer(layer_conv2)
+    layer_conv3, weights_conv3 = new_conv_layer(input=layer_conv2,
+                   num_input_channels=num_filters2,
+                   filter_size=filter_size2,
+                   num_filters=num_filters2,
+                   use_pooling=True)
+
+    layer_conv4, weights_conv4 = new_conv_layer(input=layer_conv3,
+                   num_input_channels=num_filters2,
+                   filter_size=filter_size2,
+                   num_filters=num_filters2,
+                   use_pooling=True)
+
+    flat_conv_out, len_conv_out = flatten_layer(layer_conv4)
+    
     # Fully connected layers
     # Reference dictionaries for each fully connected layer
 
@@ -442,71 +470,222 @@ def neural_network_model(data):
     output = tf.matmul(l2,output_layer['weights']) + output_layer['biases']
     print(type(output),"neural net model function")
     return output
-    
-def train_neural_network():
+
+def create_training_set():
 
     '''
-    Instantiates the neural network model and runs the main training session.
+    Runs through images on disc, processes, and "pickles" a balanced training set for later use.
+    '''
+
+    full_training_images = []
+    full_training_labels = []
+
+    for full_image_num in range(full_image_count):
+
+        print('--------------------------------------FULL-IMAGE#  %d' % (full_image_num))
+        
+        normal_full_path = base_data_path + normal_path + str(full_image_num) + '.jpg'
+        dots_full_path = base_data_path + dot_path + str(full_image_num) + '.jpg'
+
+        whole_batch_x, whole_batch_y = create_training_single(normal_full_path, dots_full_path)
+        if whole_batch_x == 0:
+            continue
+
+        for image in whole_batch_x:
+            full_training_images.append(image)
+        
+        for label in whole_batch_y:
+            full_training_labels.append(label)
+
+    print(len(full_training_images))
+    pickle.dump(full_training_images, open( "train_images.p", "wb" ))
+    pickle.dump(full_training_labels, open( "train_labels.p", "wb" ))
+
+        
+
+def train_neural_network_preloaded():
+
+    '''
+    Instantiates the neural network model and runs the main training session. Takes as input the full training set rather
+    than generating it within the training loops
     '''
 
     prediction = neural_network_model(images_placeholder)
 
     cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=labels_placeholder))
-    print(type(cost),cost,"---------------COST") 
+
     optimizer = tf.train.AdamOptimizer().minimize(cost)
-    print(type(optimizer),optimizer,"---------------Optimizer")     
+ 
     saver = tf.train.Saver()
-    print(type(saver),saver,"---------------Saver")     
+   
        
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         print('sess')
+        epoch_accuracies = []
         for epoch in range(num_epochs):
-            epoch_loss = 0
+            epoch_runs = 0
+            summed_predictions = 0
+               
+            whole_batch_x = pickle.load(open( "train_images.p", "rb" ))
+            whole_batch_y = pickle.load(open( "train_labels.p", "rb" ))
 
-            for full_image_num in range(full_image_count):
+            whole_batches = list(zip(whole_batch_x,whole_batch_y))
+            random.shuffle(whole_batches)
+            whole_batch_x, whole_batch_y = zip(*whole_batches)
 
-                print('--------------------------------------FULL-IMAGE#  %d' % (full_image_num))
-                
-                normal_full_path = base_data_path + normal_path + str(full_image_num) + '.jpg'
-                dots_full_path = base_data_path + dot_path + str(full_image_num) + '.jpg'
+            # whole_batch_x = training_set_subimages
+            # whole_batch_y = training_set_labels
 
-                whole_batch_x, whole_batch_y = create_training_single(normal_full_path, dots_full_path)
-                if whole_batch_x == 0:
-                    continue
-                batch_count = len(whole_batch_x)//batch_size
-                true_count = 0
+            if whole_batch_x == None:
+                return None
+            batch_count = len(whole_batch_x)//batch_size
 
-                if full_image_num % 2 == 0:
-                    saver.save(sess, 'seals-model')
+            training_cutoff = math.ceil(0.8*len(batch_count))
 
-                for batch_num in range(batch_count):
-                    print(batch_num, "<--------------------NEW BATCH")
-                    current_batch_x = np.zeros((batch_size, subimage_stretched))
-                    for batch in range(batch_size):
-                        current_batch_x[batch,:] = whole_batch_x[batch_num*batch_size + batch].flatten()
-                        
-                    current_batch_y = whole_batch_y[batch_num*batch_size: (batch_num+1)*batch_size]
-                    feed_dict = {images_placeholder: current_batch_x, labels_placeholder: current_batch_y}
-                    trained_model = sess.run([optimizer, cost], 
-                        feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched), 
-                            labels_placeholder: current_batch_y})
+            for batch_num in range(training_cutoff):
+                print(batch_num, "<--------------------NEW BATCH")
+                current_batch_x = np.zeros((batch_size, subimage_stretched))
+
+                for batch in range(batch_size):
+                    current_batch_x[batch,:] = whole_batch_x[batch_num*batch_size + batch].flatten()
                     
-                    trained_out = sess.run(prediction, 
-                        feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched)})
-                    print(trained_out,"<----------------------------accuracy")
-                    print(current_batch_y, "<-------------------------correct")
-                if full_image_num % 1 == 0:
-                    saver.save(sess, 'seals-model')
+                current_batch_y = whole_batch_y[batch_num*batch_size: (batch_num+1)*batch_size]
+                feed_dict = {images_placeholder: current_batch_x, labels_placeholder: current_batch_y}
+                trained_model = sess.run([optimizer, cost], 
+                    feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched), 
+                        labels_placeholder: current_batch_y})
+                
+            # Test the accuracy of the neural net on the training set after each epoch of training
+
+            for batch_num in range(training_cutoff, batch_count):
+
+                current_batch_x = np.zeros((batch_size, subimage_stretched))
+                for batch in range(batch_size):
+                    current_batch_x[batch,:] = whole_batch_x[batch_num*batch_size + batch].flatten()
+                current_batch_y = whole_batch_y[batch_num*batch_size: (batch_num+1)*batch_size]
+    
+                trained_out = sess.run(prediction, 
+                    feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched)})
+
+                if trained_out[0][0] > trained_out[0][1]:
+                    out_lab = [1,0]
+                else:
+                    out_lab = [0,1]
+
+                print(out_lab,current_batch_y, '<------------Comparison')
+                
+                if out_lab == current_batch_y[0]:
+                    summed_predictions += 1
+                    print('YES')
+
+                epoch_runs += 1
+
+            saver.save(sess, 'seals-model')
                 # correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(batch_y,1))
                 # accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
-                print(type(trained_model), trained_model)
+
+
+            epoch_accuracy = summed_predictions/epoch_runs
+            epoch_accuracies.append(epoch_accuracy)
+            print(epoch_runs, summed_predictions, epoch_accuracy)
+            print(epoch_accuracies)
 
         # sess.close()
+        saver.save(sess, graph_save_path)
         return trained_model
 
-output = train_neural_network()
-print(type(output), output)
+# def train_neural_network():
+
+#     '''
+#     Instantiates the neural network model and runs the main training session.
+#     '''
+
+#     prediction = neural_network_model(images_placeholder)
+
+#     cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=labels_placeholder))
+#     print(type(cost),cost,"---------------COST") 
+#     optimizer = tf.train.AdamOptimizer().minimize(cost)
+#     print(type(optimizer),optimizer,"---------------Optimizer")     
+#     saver = tf.train.Saver()
+#     print(type(saver),saver,"---------------Saver")     
+       
+#     with tf.Session() as sess:
+#         sess.run(tf.global_variables_initializer())
+#         print('sess')
+#         epoch_accuracies = []
+#         for epoch in range(num_epochs):
+#             epoch_runs = 0
+#             summed_predictions = 0
+#             for full_image_num in range(full_image_count):
+
+#                 print('--------------------------------------FULL-IMAGE#  %d' % (full_image_num))
+                
+#                 normal_full_path = base_data_path + normal_path + str(full_image_num) + '.jpg'
+#                 dots_full_path = base_data_path + dot_path + str(full_image_num) + '.jpg'
+
+#                 whole_batch_x, whole_batch_y = create_training_single(normal_full_path, dots_full_path)
+#                 if whole_batch_x == 0:
+#                     continue
+#                 batch_count = len(whole_batch_x)//batch_size
+#                 true_count = 0
+
+#                 if full_image_num % 2 == 0:
+#                     saver.save(sess, 'seals-model')
+
+#                 for batch_num in range(batch_count):
+#                     print(batch_num, "<--------------------NEW BATCH")
+#                     current_batch_x = np.zeros((batch_size, subimage_stretched))
+
+#                     for batch in range(batch_size):
+#                         current_batch_x[batch,:] = whole_batch_x[batch_num*batch_size + batch].flatten()
+                        
+#                     current_batch_y = whole_batch_y[batch_num*batch_size: (batch_num+1)*batch_size]
+#                     feed_dict = {images_placeholder: current_batch_x, labels_placeholder: current_batch_y}
+#                     trained_model = sess.run([optimizer, cost], 
+#                         feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched), 
+#                             labels_placeholder: current_batch_y})
+                    
+#                     trained_out = sess.run(prediction, 
+#                         feed_dict = {images_placeholder: current_batch_x.reshape(batch_size, subimage_stretched)})
+
+#                     if trained_out[0][0] > trained_out[0][1]:
+#                         out_lab = [1,0]
+#                     else:
+#                         out_lab = [0,1]
+
+#                     print(out_lab,current_batch_y, '<------------Comparison')
+
+#                     if out_lab == current_batch_y[0]:
+#                         summed_predictions += 1
+#                         print('YES')
+
+#                     epoch_runs += 1
+
+#                     print(type(trained_out),trained_out, '<-----------Trained Out')
+#                     print(current_batch_y, "<-------------------------correct")
+#                 if full_image_num % 1 == 0:
+#                     saver.save(sess, 'seals-model')
+#                 # correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(batch_y,1))
+#                 # accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
+#                 print(type(trained_model), trained_model)
+
+#             epoch_accuracy = summed_predictions/epoch_runs
+#             epoch_accuracies.append(epoch_accuracy)
+#             print(epoch_runs, summed_predictions, epoch_accuracy)
+#             print(epoch_accuracies)
+
+#         # sess.close()
+#         saver.save(sess, graph_save_path,)
+#         return trained_model
+
+
+if train_toggle == 1:
+    train_neural_network_preloaded()
+
+else:
+    create_training_set()
+
 print(MAXLABEL, "maxlabel")
 
 
